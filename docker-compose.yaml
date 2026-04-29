@@ -18,22 +18,22 @@ services:
     networks:
       - internal
 
-  gateway:
-    build: ./gateway
-    restart: unless-stopped
-    environment:
-      - OLLAMA_URL=http://ollama:11434
-      - PORT=8080
-      - BASIC_AUTH_USER=${BASIC_AUTH_USER}
-      - BASIC_AUTH_PASS=${BASIC_AUTH_PASS}
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-gemma3}
-    depends_on:
-      ollama:
-        condition: service_healthy
-    ports:
-      - "8080:8080"
-    networks:
-      - internal
+  # gateway:
+  #   build: ./gateway
+  #   restart: unless-stopped
+  #   environment:
+  #     - OLLAMA_URL=http://ollama:11434
+  #     - PORT=8080
+  #     - BASIC_AUTH_USER=${BASIC_AUTH_USER}
+  #     - BASIC_AUTH_PASS=${BASIC_AUTH_PASS}
+  #     - DEFAULT_MODEL=${DEFAULT_MODEL:-gemma3}
+  #   depends_on:
+  #     ollama:
+  #       condition: service_healthy
+  #   ports:
+  #     - "8080:8080"
+  #   networks:
+  #     - internal
 
 volumes:
   ollama_data:
