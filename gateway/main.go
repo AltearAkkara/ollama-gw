@@ -153,6 +153,51 @@ func main() {
 		})
 	})
 
+	app.Post("/pull", func(c *fiber.Ctx) error {
+		body := c.Body()
+
+		// Forward request ไป Ollama /api/pull
+		req, err := http.NewRequestWithContext(
+			c.Context(),
+			"POST",
+			fmt.Sprintf("%s/api/pull", ollamaURL),
+			bytes.NewReader(body),
+		)
+		if err != nil {
+			return c.Status(500).JSON(ErrorResponse{Success: false, Error: err.Error()})
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		// Pull ใช้เวลานาน — timeout เผื่อไว้
+		client := &http.Client{Timeout: 30 * time.Minute}
+		resp, err := client.Do(req)
+		if err != nil {
+			return c.Status(502).JSON(ErrorResponse{
+				Success: false,
+				Error:   "failed to reach ollama: " + err.Error(),
+			})
+		}
+		defer resp.Body.Close()
+
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return c.Status(500).JSON(ErrorResponse{Success: false, Error: err.Error()})
+		}
+
+		return c.Status(resp.StatusCode).Send(respBody)
+	})
+
+	app.Get("/tags", func(c *fiber.Ctx) error {
+		resp, err := http.Get(fmt.Sprintf("%s/api/tags", ollamaURL))
+		if err != nil {
+			return c.Status(502).JSON(ErrorResponse{Success: false, Error: err.Error()})
+		}
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		return c.Status(resp.StatusCode).Send(body)
+	})
+
 	log.Printf("Gateway starting on :%s → Ollama at %s", port, ollamaURL)
 	log.Fatal(app.Listen(":" + port))
 }
