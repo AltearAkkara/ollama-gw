@@ -187,6 +187,38 @@ func main() {
 		return c.Status(resp.StatusCode).Send(respBody)
 	})
 
+	app.Delete("/delete", func(c *fiber.Ctx) error {
+		body := c.Body()
+
+		req, err := http.NewRequestWithContext(
+			c.Context(),
+			"DELETE",
+			fmt.Sprintf("%s/api/delete", ollamaURL),
+			bytes.NewReader(body),
+		)
+		if err != nil {
+			return c.Status(500).JSON(ErrorResponse{Success: false, Error: err.Error()})
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return c.Status(502).JSON(ErrorResponse{
+				Success: false,
+				Error:   "failed to reach ollama: " + err.Error(),
+			})
+		}
+		defer resp.Body.Close()
+
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return c.Status(500).JSON(ErrorResponse{Success: false, Error: err.Error()})
+		}
+
+		return c.Status(resp.StatusCode).Send(respBody)
+	})
+
 	app.Get("/tags", func(c *fiber.Ctx) error {
 		resp, err := http.Get(fmt.Sprintf("%s/api/tags", ollamaURL))
 		if err != nil {
