@@ -112,14 +112,7 @@ def _process_one(
             print(f"  [{i:>2}] {d.name:<28}  conf={d.conf:.2f}  box=({x1},{y1},{x2},{y2})")
             if save_crops and d.name == "z_3_counter":
                 gray = cv2.cvtColor(img[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
-                gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-                gray = cv2.GaussianBlur(gray, (3, 3), 0)
-                crop = cv2.adaptiveThreshold(
-                    gray, 255,
-                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    cv2.THRESH_BINARY,
-                    51, 5,
-                )
+                crop = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
                 crop_path = os.path.join(out_dir, rel_no_ext + f"_crop{i}_{d.name}.jpg")
                 os.makedirs(os.path.dirname(crop_path) or out_dir, exist_ok=True)
                 cv2.imwrite(crop_path, crop)
