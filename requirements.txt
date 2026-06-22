@@ -1,0 +1,11 @@
+opencv-python
+numpy
+pydantic
+ultralytics
+fastapi
+onnx
+onnxruntime
+uvicorn
+torch
+torchvision
+torchaudio
