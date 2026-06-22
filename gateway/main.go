@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -274,98 +275,90 @@ func main() {
 			crops = append(crops, base64.StdEncoding.EncodeToString(data))
 		}
 
-		// Send all crops in one request
+		// Parallel: one LLM request per crop
 		falseVal := false
 		llmURL := getEnv("LLM_OVERRIDE_URL", fmt.Sprintf("%s/api/generate", ollamaURL))
-		llmUser := getEnv("LLM_OVERRIDE_USER", "admin")
-		llmPass := getEnv("LLM_OVERRIDE_PASS", "secret")
+		llmUser := getEnv("LLM_OVERRIDE_USER", "")
+		llmPass := getEnv("LLM_OVERRIDE_PASS", "")
 
-		fmt.Printf("Forwarding to LLM at %s with %d crops\n", llmURL, len(crops))
-		reqPayload := GenerateRequest{
-			Model:  body.Model,
-			Prompt: body.Prompt,
-			Images: crops,
-			Stream: &falseVal,
+		type cropResult struct {
+			idx      int
+			response string
+			err      string
 		}
-		reqBody, err := json.Marshal(reqPayload)
-		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
-				Success: false,
-				Error:   "failed to marshal llm request: " + err.Error(),
-			})
+		results := make([]cropResult, len(crops))
+		var wg sync.WaitGroup
+		for i, img := range crops {
+			wg.Add(1)
+			go func(idx int, b64 string) {
+				defer wg.Done()
+				payload := GenerateRequest{
+					Model:  body.Model,
+					Prompt: body.Prompt,
+					Images: []string{b64},
+					Stream: &falseVal,
+				}
+				reqBody, err := json.Marshal(payload)
+				if err != nil {
+					results[idx] = cropResult{idx: idx, err: err.Error()}
+					return
+				}
+				req, err := http.NewRequest("POST", llmURL, bytes.NewReader(reqBody))
+				if err != nil {
+					results[idx] = cropResult{idx: idx, err: err.Error()}
+					return
+				}
+				req.Header.Set("Content-Type", "application/json")
+				if llmUser != "" {
+					req.SetBasicAuth(llmUser, llmPass)
+				}
+				resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
+				if err != nil {
+					results[idx] = cropResult{idx: idx, err: err.Error()}
+					return
+				}
+				defer resp.Body.Close()
+				respBody, _ := io.ReadAll(resp.Body)
+				log.Printf("[llm crop=%d] status=%d body=%s", idx, resp.StatusCode, string(respBody))
+				var r struct {
+					Response string `json:"response"`
+				}
+				if err := json.Unmarshal(respBody, &r); err != nil {
+					results[idx] = cropResult{idx: idx, err: "parse: " + err.Error()}
+					return
+				}
+				results[idx] = cropResult{idx: idx, response: r.Response}
+			}(i, img)
 		}
-		httpReq, err := http.NewRequest("POST", llmURL, bytes.NewReader(reqBody))
-		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
-				Success: false,
-				Error:   "failed to create llm request: " + err.Error(),
-			})
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		if llmUser != "" {
-			httpReq.SetBasicAuth(llmUser, llmPass)
-		}
-		llmResp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(httpReq)
-		if err != nil {
-			return c.Status(fiber.StatusBadGateway).JSON(ErrorResponse{
-				Success: false,
-				Error:   "failed to reach llm: " + err.Error(),
-			})
-		}
-		defer llmResp.Body.Close()
-		respBody, err := io.ReadAll(llmResp.Body)
-		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
-				Success: false,
-				Error:   "failed to read llm response: " + err.Error(),
-			})
-		}
-		var llmResult struct {
-			Response string `json:"response"`
-		}
-		log.Printf("[llm] status=%d body=%s", llmResp.StatusCode, string(respBody))
-		if err := json.Unmarshal(respBody, &llmResult); err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
-				Success: false,
-				Error:   "failed to parse llm response: " + err.Error(),
-			})
-		}
+		wg.Wait()
 
-		// Extract numbers inside [...] from the response
+		// Extract first number inside [...] from each response
 		bracketRe := regexp.MustCompile(`\[([^\]]+)\]`)
 		numRe := regexp.MustCompile(`-?\d+`)
 
-		var answers []int
-		for _, bracket := range bracketRe.FindAllStringSubmatch(llmResult.Response, -1) {
-			for _, m := range numRe.FindAllString(bracket[1], -1) {
+		answers := make([]int, len(crops))
+		rawResponses := make([]string, len(crops))
+		for _, r := range results {
+			rawResponses[r.idx] = r.response
+			if r.err != "" || r.response == "" {
+				continue
+			}
+			m := bracketRe.FindStringSubmatch(r.response)
+			if m == nil {
+				continue
+			}
+			if num := numRe.FindString(m[1]); num != "" {
 				var n int
-				if _, err := fmt.Sscanf(m, "%d", &n); err == nil {
-					answers = append(answers, n)
-				}
+				fmt.Sscanf(num, "%d", &n)
+				answers[r.idx] = n
 			}
-		}
-		// Deduplicate while preserving order, then cap to number of crops sent
-		seen := make(map[int]bool)
-		unique := make([]int, 0, len(answers))
-		for _, n := range answers {
-			if !seen[n] {
-				seen[n] = true
-				unique = append(unique, n)
-			}
-		}
-		if len(unique) > len(crops) {
-			unique = unique[:len(crops)]
-		}
-		answers = unique
-		if answers == nil {
-			answers = []int{}
 		}
 
 		return c.JSON(fiber.Map{
-			"success":      true,
-			"duration_ms":  time.Since(start).Milliseconds(),
-			"response":     answers,
-			"raw_response": llmResult.Response,
+			"success":       true,
+			"duration_ms":   time.Since(start).Milliseconds(),
+			"response":      answers,
+			"raw_responses": rawResponses,
 		})
 	})
 
