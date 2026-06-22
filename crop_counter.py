@@ -111,7 +111,12 @@ def _process_one(
             print(f"{d.name:<28}")
             print(f"  [{i:>2}] {d.name:<28}  conf={d.conf:.2f}  box=({x1},{y1},{x2},{y2})")
             if save_crops and d.name == "z_3_counter":
-                crop = cv2.cvtColor(img[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+                raw = img[y1:y2, x1:x2]
+                h_c, w_c = raw.shape[:2]
+                if w_c > 400:
+                    scale = 400 / w_c
+                    raw = cv2.resize(raw, (400, int(h_c * scale)), interpolation=cv2.INTER_AREA)
+                crop = raw
                 crop_path = os.path.join(out_dir, rel_no_ext + f"_crop{i}_{d.name}.jpg")
                 os.makedirs(os.path.dirname(crop_path) or out_dir, exist_ok=True)
                 cv2.imwrite(crop_path, crop)
