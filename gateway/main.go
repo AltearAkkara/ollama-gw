@@ -112,7 +112,7 @@ func main() {
 		start := time.Now()
 
 		resp, err := client.Post(
-			fmt.Sprintf("%s/generate", ollamaURL),
+			fmt.Sprintf("%s/api/generate", ollamaURL),
 			"application/json",
 			bytes.NewReader(body),
 		)
@@ -276,7 +276,7 @@ func main() {
 
 		// Send all crops in one request
 		falseVal := false
-		llmURL := getEnv("LLM_OVERRIDE_URL", fmt.Sprintf("%s/generate", ollamaURL))
+		llmURL := getEnv("LLM_OVERRIDE_URL", fmt.Sprintf("%s/api/generate", ollamaURL))
 		llmUser := getEnv("LLM_OVERRIDE_USER", "admin")
 		llmPass := getEnv("LLM_OVERRIDE_PASS", "secret")
 
