@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -113,7 +112,7 @@ func main() {
 		start := time.Now()
 
 		resp, err := client.Post(
-			fmt.Sprintf("%s/api/generate", ollamaURL),
+			fmt.Sprintf("%s/generate", ollamaURL),
 			"application/json",
 			bytes.NewReader(body),
 		)
@@ -157,7 +156,7 @@ func main() {
 		})
 	})
 
-	app.Post("/generate-with-crop-preprocess", func(c *fiber.Ctx) error {
+	app.Post("/generate-with-crop-counter", func(c *fiber.Ctx) error {
 		var body struct {
 			Image  string `json:"image"`
 			Model  string `json:"model"`
@@ -260,9 +259,12 @@ func main() {
 
 		// Read crop files from tmpOutDir before defer deletes them
 		entries, _ := os.ReadDir(tmpOutDir)
+
+		// Only include individual crop files, exclude the annotated overview image (*_crops.jpg)
+		individualCropRe := regexp.MustCompile(`_crop\d+_`)
 		crops := make([]string, 0, len(entries))
 		for _, e := range entries {
-			if e.IsDir() {
+			if e.IsDir() || !individualCropRe.MatchString(e.Name()) {
 				continue
 			}
 			data, err := os.ReadFile(filepath.Join(tmpOutDir, e.Name()))
@@ -272,83 +274,97 @@ func main() {
 			crops = append(crops, base64.StdEncoding.EncodeToString(data))
 		}
 
-		// Fan-out: send each crop to LLM in parallel
-		type cropLLMResult struct {
-			Index    int    `json:"index"`
-			Response string `json:"response"`
-			Error    string `json:"error,omitempty"`
-		}
-		llmResults := make([]cropLLMResult, len(crops))
-		var wg sync.WaitGroup
+		// Send all crops in one request
 		falseVal := false
-		for i, cropB64 := range crops {
-			wg.Add(1)
-			go func(idx int, img string) {
-				defer wg.Done()
-				reqPayload := GenerateRequest{
-					Model:  body.Model,
-					Prompt: body.Prompt,
-					Images: []string{img},
-					Stream: &falseVal,
-				}
-				reqBody, err := json.Marshal(reqPayload)
-				if err != nil {
-					llmResults[idx] = cropLLMResult{Index: idx, Error: "marshal: " + err.Error()}
-					return
-				}
-				client := &http.Client{Timeout: 5 * time.Minute}
-				resp, err := client.Post(
-					fmt.Sprintf("%s/api/generate", ollamaURL),
-					"application/json",
-					bytes.NewReader(reqBody),
-				)
-				if err != nil {
-					llmResults[idx] = cropLLMResult{Index: idx, Error: "ollama: " + err.Error()}
-					return
-				}
-				defer resp.Body.Close()
-				respBody, err := io.ReadAll(resp.Body)
-				if err != nil {
-					llmResults[idx] = cropLLMResult{Index: idx, Error: "read: " + err.Error()}
-					return
-				}
-				var ollamaResp OllamaResponse
-				if err := json.Unmarshal(respBody, &ollamaResp); err != nil {
-					llmResults[idx] = cropLLMResult{Index: idx, Error: "parse: " + err.Error()}
-					return
-				}
-				llmResults[idx] = cropLLMResult{Index: idx, Response: ollamaResp.Response}
-			}(i, cropB64)
-		}
-		wg.Wait()
+		llmURL := getEnv("LLM_OVERRIDE_URL", fmt.Sprintf("%s/generate", ollamaURL))
+		llmUser := getEnv("LLM_OVERRIDE_USER", "admin")
+		llmPass := getEnv("LLM_OVERRIDE_PASS", "secret")
 
-		// Extract numbers inside [...] from each response, concat into one flat array
+		fmt.Printf("Forwarding to LLM at %s with %d crops\n", llmURL, len(crops))
+		reqPayload := GenerateRequest{
+			Model:  body.Model,
+			Prompt: body.Prompt,
+			Images: crops,
+			Stream: &falseVal,
+		}
+		reqBody, err := json.Marshal(reqPayload)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+				Success: false,
+				Error:   "failed to marshal llm request: " + err.Error(),
+			})
+		}
+		httpReq, err := http.NewRequest("POST", llmURL, bytes.NewReader(reqBody))
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+				Success: false,
+				Error:   "failed to create llm request: " + err.Error(),
+			})
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		if llmUser != "" {
+			httpReq.SetBasicAuth(llmUser, llmPass)
+		}
+		llmResp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(httpReq)
+		if err != nil {
+			return c.Status(fiber.StatusBadGateway).JSON(ErrorResponse{
+				Success: false,
+				Error:   "failed to reach llm: " + err.Error(),
+			})
+		}
+		defer llmResp.Body.Close()
+		respBody, err := io.ReadAll(llmResp.Body)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+				Success: false,
+				Error:   "failed to read llm response: " + err.Error(),
+			})
+		}
+		var llmResult struct {
+			Response string `json:"response"`
+		}
+		if err := json.Unmarshal(respBody, &llmResult); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+				Success: false,
+				Error:   "failed to parse llm response: " + err.Error(),
+			})
+		}
+
+		// Extract numbers inside [...] from the response
 		bracketRe := regexp.MustCompile(`\[([^\]]+)\]`)
-		numRe := regexp.MustCompile(`\d+`)
+		numRe := regexp.MustCompile(`-?\d+`)
 
 		var answers []int
-		for _, r := range llmResults {
-			if r.Error != "" {
-				continue
-			}
-			for _, bracket := range bracketRe.FindAllStringSubmatch(r.Response, -1) {
-				// bracket[1] is the content inside []
-				for _, m := range numRe.FindAllString(bracket[1], -1) {
-					var n int
-					if _, err := fmt.Sscanf(m, "%d", &n); err == nil {
-						answers = append(answers, n)
-					}
+		for _, bracket := range bracketRe.FindAllStringSubmatch(llmResult.Response, -1) {
+			for _, m := range numRe.FindAllString(bracket[1], -1) {
+				var n int
+				if _, err := fmt.Sscanf(m, "%d", &n); err == nil {
+					answers = append(answers, n)
 				}
 			}
 		}
+		// Deduplicate while preserving order, then cap to number of crops sent
+		seen := make(map[int]bool)
+		unique := make([]int, 0, len(answers))
+		for _, n := range answers {
+			if !seen[n] {
+				seen[n] = true
+				unique = append(unique, n)
+			}
+		}
+		if len(unique) > len(crops) {
+			unique = unique[:len(crops)]
+		}
+		answers = unique
 		if answers == nil {
 			answers = []int{}
 		}
 
 		return c.JSON(fiber.Map{
-			"success":     true,
-			"duration_ms": time.Since(start).Milliseconds(),
-			"answers":     answers,
+			"success":      true,
+			"duration_ms":  time.Since(start).Milliseconds(),
+			"response":     answers,
+			"raw_response": llmResult.Response,
 		})
 	})
 
