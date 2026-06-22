@@ -323,6 +323,7 @@ func main() {
 		var llmResult struct {
 			Response string `json:"response"`
 		}
+		log.Printf("[llm] status=%d body=%s", llmResp.StatusCode, string(respBody))
 		if err := json.Unmarshal(respBody, &llmResult); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
 				Success: false,
