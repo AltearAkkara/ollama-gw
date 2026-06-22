@@ -27,7 +27,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY --from=builder /app/gateway .
 
-COPY test_crop_only.py .
 COPY crop_counter.py .
 COPY yolo_detector.py .
 COPY models/ ./models/
