@@ -2,6 +2,8 @@ services:
   ollama-api:
     image: 'ollama/ollama:latest'
     restart: unless-stopped
+    environment:
+      - OLLAMA_NUM_PARALLEL=4
     volumes:
       - 'ollama:/root/.ollama'
     healthcheck:
