@@ -319,7 +319,7 @@ func main() {
 				}
 				defer resp.Body.Close()
 				respBody, _ := io.ReadAll(resp.Body)
-				log.Printf("[llm crop=%d] status=%d body=%s", idx, resp.StatusCode, string(respBody))
+				// log.Printf("[llm crop=%d] status=%d body=%s", idx, resp.StatusCode, string(respBody))
 				var r struct {
 					Response string `json:"response"`
 				}
