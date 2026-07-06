@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +61,21 @@ func main() {
 	authUser := getEnv("BASIC_AUTH_USER", "admin")
 	authPass := getEnv("BASIC_AUTH_PASS", "secret")
 
+	uploadDir := getEnv("UPLOAD_DIR", "/app/uploads")
+	publicBaseURL := getEnv("PUBLIC_BASE_URL", "")
+	if publicBaseURL == "" {
+		log.Fatal("PUBLIC_BASE_URL environment variable is required")
+	}
+	maxUploadSizeMB, err := strconv.ParseInt(getEnv("MAX_UPLOAD_SIZE_MB", "10"), 10, 64)
+	if err != nil {
+		log.Fatalf("invalid MAX_UPLOAD_SIZE_MB: %v", err)
+	}
+	maxUploadSizeBytes := maxUploadSizeMB * 1024 * 1024
+
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		log.Fatalf("failed to create upload dir %s: %v", uploadDir, err)
+	}
+
 	app := fiber.New(fiber.Config{
 		BodyLimit:    50 * 1024 * 1024, // 50MB
 		ReadTimeout:  5 * time.Minute,
@@ -71,11 +87,15 @@ func main() {
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
 
+	app.Get("/files/:filename", newServeFileHandler(uploadDir))
+
 	app.Use(basicauth.New(basicauth.Config{
 		Users: map[string]string{
 			authUser: authPass,
 		},
 	}))
+
+	app.Post("/upload", newUploadHandler(uploadDir, publicBaseURL, maxUploadSizeBytes))
 
 	app.Post("/generate", func(c *fiber.Ctx) error {
 		var req GenerateRequest

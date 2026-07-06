@@ -24,6 +24,11 @@ services:
       - BASIC_AUTH_USER=${BASIC_AUTH_USER}
       - BASIC_AUTH_PASS=${BASIC_AUTH_PASS}
       - DEFAULT_MODEL=${DEFAULT_MODEL:-gemma3}
+      - UPLOAD_DIR=/app/uploads
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
+      - MAX_UPLOAD_SIZE_MB=${MAX_UPLOAD_SIZE_MB:-10}
+    volumes:
+      - 'uploads:/app/uploads'
     depends_on:
       ollama-api:
         condition: service_healthy
@@ -32,3 +37,4 @@ services:
 
 volumes:
   ollama:
+  uploads:
