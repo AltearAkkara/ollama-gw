@@ -63,9 +63,9 @@ func main() {
 
 	uploadDir := getEnv("UPLOAD_DIR", "/app/uploads")
 	publicBaseURL := getEnv("PUBLIC_BASE_URL", "")
-	if publicBaseURL == "" {
-		log.Fatal("PUBLIC_BASE_URL environment variable is required")
-	}
+	// if publicBaseURL == "" {
+	// 	log.Fatal("PUBLIC_BASE_URL environment variable is required")
+	// }
 	maxUploadSizeMB, err := strconv.ParseInt(getEnv("MAX_UPLOAD_SIZE_MB", "10"), 10, 64)
 	if err != nil {
 		log.Fatalf("invalid MAX_UPLOAD_SIZE_MB: %v", err)
